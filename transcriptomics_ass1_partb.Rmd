@@ -1,0 +1,184 @@
+---
+title: "Differential Expression Analysis with DEseq2"
+author: "Lochan Karthick Ravichandran"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load-libraries, message=FALSE, warning=FALSE}
+##Loading the Required Libraries:
+
+library(vsn)
+library(DESeq2)
+library(limma)
+library(ashr)
+library(ggplot2)
+library(ggrepel)
+library(vsn)
+```
+
+```{r load-counts, message=FALSE, warning=FALSE}
+##Loading the count_matrices obtained from PartA:
+
+gene_counts = read.csv("gene_count_matrix.csv", row.names = 1)
+transcript_counts = read.csv("transcript_count_matrix.csv", row.names = 1)
+design_table = read.csv("Experiment_design.csv", row.names = 1)
+
+#making sure the row names in the design table match the column names in count_matrices:
+
+stopifnot(all(colnames(gene_counts) == rownames(design_table)))
+```
+
+```{r DESeq_creation, message=FALSE, warning=FALSE}
+##Creating DESeq2 Datasets:
+
+#Making group column a factor explicitly:
+
+design_table$Group <- as.factor(design_table$Group)
+
+#Creating DESeq2 datasets:
+
+dds_gene = DESeqDataSetFromMatrix(countData = gene_counts, colData = design_table, design = ~ Group)
+dds_transcript = DESeqDataSetFromMatrix(countData = transcript_counts, colData = design_table, design = ~ Group)
+```
+
+```{r Pre-filter, message=FALSE, warning=FALSE}
+##Pre-filtering: We only consider genes and transcripts with atleast 10 reads in 3 samples
+
+dds_gene = dds_gene[rowSums(counts(dds_gene) >= 10) >=3, ]
+dds_transcript = dds_transcript[rowSums(counts(dds_transcript) >= 10) >= 3, ]
+```
+
+```{r DE-analysis, message=FALSE, warning=FALSE}
+##Running DE analysis with fitType = "local" to prevent warnings:
+
+dds_gene = DESeq(dds_gene, fitType = "local")
+dds_transcript = DESeq(dds_transcript, fitType = "local")
+```
+
+```{r Dispersion-plot, message=FALSE, warning=FALSE}
+##Generating Dispersion plot:
+
+plotDispEsts(dds_gene, main = "Dispersion Estimates (Gene Level)")
+plotDispEsts(dds_transcript, main = "Dispersion Estimates (Transcript Level)")
+```
+
+```{r pca-plot, message=FALSE, warning=FALSE}
+##Rlogging the data to deal with low counts and then producing PCA plots:
+
+rld_gene = rlog(dds_gene, blind=TRUE)
+rld_transcript = rlog(dds_transcript, blind=TRUE)
+
+gene_pca = plotPCA(rld_gene, intgroup = "Group")+ 
+  geom_text_repel(aes(label = colnames(rld_gene)), size = 3)+
+  ggtitle("PCA plot (Gene level)")
+
+transcript_pca = plotPCA(rld_transcript, intgroup = "Group")+
+  geom_text_repel(aes(label = colnames(rld_transcript)), size = 3)+
+  ggtitle("PCA Plot (Transcript level)")
+
+gene_pca
+transcript_pca
+```
+
+```{r SDvsMean_plot, message=FALSE, warning=FALSE}
+##Generate SD vs Mean plots for gene counts:
+
+norm_counts = log2(counts(dds_gene, normalized = TRUE) + 1)
+meanSdPlot(norm_counts, ranks = FALSE)
+meanSdPlot(assay(rld_gene), ranks = FALSE)
+```
+
+```{r unshrunken_DE_LFC_0, message=FALSE, warning=FALSE}
+##Extracting DE results(B vs A and C vs A) for standard Null hypothesis that is LFC = 0 and unshrunken:
+
+res_BvsA = results(dds_gene, contrast = c("Group", "B", "A"))
+res_CvsA = results(dds_gene, contrast = c("Group", "C", "A"))
+```
+
+```{r unshrunken_DE_LFC_1, message=FALSE, warning=FALSE}
+##Extracting DE results(B vs A and C vs A) for Null hypothesis that LFC < 1 and unshrunken:
+
+res_BvsA_LFC1 = results(dds_gene, contrast = c("Group", "B", "A"), lfcThreshold = 1)
+res_CvsA_LFC1 = results(dds_gene, contrast = c("Group", "C", "A"), lfcThreshold = 1)
+```
+
+```{r MA_plot_unshrunked_LFC_0_1, message=FALSE, warning=FALSE}
+##Generating MA plots for both LFC = 0 and LFC < 1:
+
+DESeq2::plotMA(res_BvsA, main = "MA Plot (B vs A, LFC=0)")
+DESeq2::plotMA(res_BvsA_LFC1, main = "MA Plot (B vs A, LFC<1)")
+DESeq2::plotMA(res_CvsA, main = "MA Plot (C vs A, LFC=0)")
+DESeq2::plotMA(res_CvsA_LFC1, main = "MA Plot (C vs A, LFC<1)")
+```
+
+```{r shrinkage_LFC_0_1, message=FALSE, warning=FALSE}
+##Applying LFC shrinkage for LFC = 0 and LFC < 1 :
+
+res_BvsA_shrunk_LFC0 = lfcShrink(dds_gene, coef = "Group_B_vs_A", type = "ashr")
+res_BvsA_shrunk_LFC1 = lfcShrink(dds_gene, coef = "Group_B_vs_A", type = "ashr", lfcThreshold = 1)
+res_CvsA_shrunk_LFC0 = lfcShrink(dds_gene, coef = "Group_C_vs_A", type = "ashr")
+res_CvsA_shrunk_LFC1 = lfcShrink(dds_gene, coef = "Group_C_vs_A", type = "ashr", lfcThreshold = 1)
+
+```
+
+```{r sig_genes_LFC_0_1, message=FALSE, warning=FALSE}
+##Extracting and saving significantly differentially expressed genes in both LFC =0 and LFC < 1:
+
+sig_BvsA_LFC0 <- subset(res_BvsA_shrunk_LFC0, padj < 0.05)
+sig_BvsA_LFC0 <- sig_BvsA_LFC0[order(sig_BvsA_LFC0$log2FoldChange, decreasing = TRUE), ]
+write.csv(sig_BvsA_LFC0, "Significant.Genes.BvsA.LFC0.csv", quote=FALSE)
+
+sig_BvsA_LFC1 <- subset(res_BvsA_shrunk_LFC1, padj < 0.05)
+sig_BvsA_LFC1 <- sig_BvsA_LFC1[order(sig_BvsA_LFC1$log2FoldChange, decreasing = TRUE), ]
+write.csv(sig_BvsA_LFC1, "Significant.Genes.BvsA.LFC1.csv", quote=FALSE)
+
+sig_CvsA_LFC0 <- subset(res_CvsA_shrunk_LFC0, padj < 0.05)
+sig_CvsA_LFC0 <- sig_CvsA_LFC0[order(sig_CvsA_LFC0$log2FoldChange, decreasing = TRUE), ]
+write.csv(sig_CvsA_LFC0, "Significant.Genes.CvsA.LFC0.csv", quote=FALSE)
+
+sig_CvsA_LFC1 <- subset(res_CvsA_shrunk_LFC1, padj < 0.05)
+sig_CvsA_LFC1 <- sig_CvsA_LFC1[order(sig_CvsA_LFC1$log2FoldChange, decreasing = TRUE), ]
+write.csv(sig_CvsA_LFC1, "Significant.Genes.CvsA.LFC1.csv", quote=FALSE)
+```
+
+```{r MA_plot_unshrunken, message=FALSE, warning=FALSE}
+##Generating MA plots for Shrunken LFC's:
+
+DESeq2::plotMA(res_BvsA_shrunk_LFC0, main = "Shrunken MA Plot (B vs A, LFC=0)")
+DESeq2::plotMA(res_BvsA_shrunk_LFC1, main = "Shrunken MA Plot (B vs A, LFC<1)")
+DESeq2::plotMA(res_CvsA_shrunk_LFC0, main = "Shrunken MA Plot (C vs A, LFC=0)")
+DESeq2::plotMA(res_CvsA_shrunk_LFC1, main = "Shrunken MA Plot (C vs A, LFC<1)")
+```
+
+```{r limma_batch_handling, message=FALSE, warning=FALSE}
+##Running limma for batch removal on rlog-transformed gene counts and saving the results:
+
+batch_corrected = removeBatchEffect(assay(rld_gene), batch = design_table$Replicate)
+write.csv(batch_corrected, "BatchCorrected.Rlog.csv", quote = FALSE)
+```
+
+
+
+```{r}
+# Perform rlog transformation for variance stabilization
+rld <- rlog(dds_gene, blind = FALSE)
+
+# Extract the assay matrix from rld
+assay_rld <- assay(rld)
+
+# Apply batch correction using removeBatchEffect from limma
+batch_corrected_assay <- removeBatchEffect(assay_rld, batch = colData(dds_gene)$Batch)
+
+# Replace the assay matrix in rld with the batch-corrected version
+assay(rld) <- batch_corrected_assay
+
+# Generate PCA plot using plotPCA with batch-corrected data
+plotPCA(rld, intgroup = "Group") + ggtitle("PCA Plot After Batch Correction")+ 
+  geom_text_repel(aes(label = colnames(rld_gene)), size = 3)
+  
+```
